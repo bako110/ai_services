@@ -22,8 +22,10 @@ open-clip-torch==2.24.0
 torch==2.3.0+cpu
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Detection d'objets
-ultralytics==8.2.18
+# Detection d'objets — >=8.3.0 requis pour l'architecture YOLO11 (bloc C3k2),
+# absente de 8.2.x : torch.load d'un poids yolo11n.pt echoue sinon avec
+# "AttributeError: Can't get attribute 'C3k2'" (constate 2026-07-30 sur le VPS).
+ultralytics==8.3.40
 
 # Audio — transcription (CTranslate2, plus leger que whisper original)
 faster-whisper==1.0.2
