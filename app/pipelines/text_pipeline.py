@@ -60,14 +60,33 @@ def classify_content(
         "'arnaque' = promesse de gain irrealiste, fausse promo, lien suspect, "
         "demande d'argent/coordonnees bancaires deguisee.\n"
         f"Contenu:\n{context}\n\n"
-        "Reponds uniquement au format: categorie|confiance(0-1)|motif_signalement"
+        "Reponds UNIQUEMENT avec les 3 valeurs choisies separees par | "
+        "(pas de texte, pas les noms des champs). "
+        "Exemple de format exact attendu: musique|0.9|aucun /no_think"
     )
-    raw = llm(prompt, max_tokens=32, temperature=0.0)["choices"][0]["text"].strip()
+    # create_chat_completion (pas l'appel completion brut `llm(prompt, ...)`)
+    # est necessaire : Qwen3-Instruct est entraine sur un chat template
+    # (<|im_start|>user...<|im_end|>), un prompt brut le fait "continuer le
+    # texte" au lieu d'y repondre — constate en prod le 2026-07-30, le modele
+    # completait litteralement "confiance(0-1)" par du texte d'exemple au lieu
+    # de classifier. Le suffixe "/no_think" desactive le mode raisonnement de
+    # Qwen3 (sinon le budget max_tokens est consomme par un bloc <think>...</think>
+    # avant d'atteindre la reponse).
+    raw = llm.create_chat_completion(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=64,
+        temperature=0.0,
+    )["choices"][0]["message"]["content"].strip()
 
     return _parse_response(raw)
 
 
 def _parse_response(raw: str) -> dict:
+    # Qwen3 emet toujours un bloc <think>...</think> avant la reponse, meme
+    # vide avec /no_think ("<think>\n\n</think>\n\ncategorie|conf|motif") —
+    # ne garder que ce qui suit la derniere balise fermante.
+    if "</think>" in raw:
+        raw = raw.rsplit("</think>", 1)[-1].strip()
     try:
         category, confidence, flag_reason = [p.strip().lower() for p in raw.split("|")]
         if category not in CATEGORIES:
