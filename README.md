@@ -3,17 +3,30 @@
 Squelette du microservice IA GoFolyX. Voir [`../ARCHITECTURE_IA.md`](../ARCHITECTURE_IA.md)
 pour la conception complete avant de modifier quoi que ce soit ici.
 
-Etat actuel : **structure de code, pas encore teste sur donnees reelles.**
-Ne pas deployer en prod avant la Phase 0 (preuve de concept, mesure RAM/latence
-sur le VPS reel) decrite dans ARCHITECTURE_IA.md section 7.
+Etat (2026-07-30) : **teste reellement sur le VPS de prod** (bench CLIP/YOLO/Qwen3
+avec les vrais modeles, voir "Historique des problemes reels" plus bas) — pas
+encore branche a stream_backend (aucun appel `send_task` cote backend).
 
 Verifie contre le vrai code de `stream_backend` (2026-07-29) : tables
 `reels`/`posts`/`lives` et colonne `category` existent deja (voir
 `stream_backend/app/db/postgres/models/reel.py` etc.), la taxonomie
-correspond a `stream_backend/app/utils/content_category.py`. Broker Celery
-et format DATABASE_URL corriges pour matcher `stream_backend/app/tasks/celery_app.py`
-et `stream_backend/app/config.py` — **ai_service reutilise le meme RabbitMQ/Redis**,
-pas de second broker.
+correspond a `stream_backend/app/utils/content_category.py`.
+
+## Topologie de deploiement (2026-07-30) — serveur separe du backend
+
+`ai_service` tourne sur son **propre VPS** (169.58.100.82), distinct de celui
+du backend (178.238.230.82, deja dense : Postgres/Redis/RabbitMQ/Elasticsearch/
+stream_app, ~3,5 Gi RAM libres). Les deux VPS sont relies par un **tunnel
+WireGuard prive** :
+- VPS backend = peer `10.10.0.1`, expose `postgres:5432`/`redis:6379`/`rabbitmq:5672`
+  UNIQUEMENT sur cette IP privee (jamais publiquement — verifie par scan externe).
+- VPS ai_service = peer `10.10.0.2`.
+
+`docker-compose.yml` (racine) correspond a ce mode distant : pas de reseau
+Docker partage, `.env.ai` contient des URLs completes pointant sur `10.10.0.1`.
+`docker-compose.colocated.yml` + `.env.ai.colocated.example` restent pour
+reference si l'architecture redevient un jour colocalisee (meme serveur que
+le backend, reseau Docker partage `stream_net`).
 
 ## Installation — deux modes
 
@@ -26,12 +39,10 @@ pip install -r requirements.txt
 copy .env.example .env         # renseigner DATABASE_URL/RABBITMQ_URL/REDIS_URL + chemins modeles
 ```
 
-**Deploiement VPS (Docker, mode reel)** — rejoint le reseau Docker existant de
-`stream_backend` pour reutiliser Postgres/RabbitMQ/Redis deja en place, sans
-dupliquer les secrets :
+**Deploiement VPS distant (Docker, mode reel)** — sur 169.58.100.82, connecte
+au backend via WireGuard :
 ```bash
-cp .env.ai.example .env.ai     # variables sans secret (chemins modeles)
-docker network ls              # verifier le nom reel du reseau stream_net
+cp .env.ai.example .env.ai     # completer avec les vrais mots de passe (10.10.0.1)
 docker compose up -d --build   # voir docker-compose.yml
 ```
 
@@ -76,6 +87,27 @@ chargement/l'inference) et `duration_s`. Criteres go/no-go :
 uvicorn app.main:app --reload --port 8100
 celery -A app.workers.celery_app worker -Q ai --concurrency=1 --loglevel=info
 ```
+
+## Historique des problemes reels constates (2026-07-30, premier run sur VPS)
+
+Deux incompatibilites de version decouvertes en testant avec les VRAIS
+modeles (pas seulement en relisant le code) — corrigees dans `requirements.txt` :
+- `ultralytics==8.2.18` ne connait pas l'architecture YOLO11 (bloc `C3k2`) —
+  `torch.load` d'un poids `yolo11n.pt` reel echouait avec `AttributeError:
+  Can't get attribute 'C3k2'`. Corrige vers `8.3.40`.
+- `llama-cpp-python==0.2.76` ne connait pas l'architecture GGUF `qwen3` —
+  chargement d'un vrai `Qwen3-1.7B-Q4_K_M.gguf` echouait avec `unknown model
+  architecture: 'qwen3'`. Corrige vers `0.3.34` (wheel CPU precompilee,
+  toujours pas de compilation source).
+
+Chiffres reels mesures sur le VPS (bench_moderation.py / bench_text.py,
+image de test neutre) :
+- Chargement CLIP (ViT-B-32) : ~24s, +1,44 Go RAM (one-shot par job).
+- `classify_nsfw` une fois CLIP charge : +0,24s, +5 Mo — confirme le cout
+  quasi nul de la moderation NSFW une fois l'embedding recommandation deja
+  calcule.
+- YOLO (decharge CLIP, charge YOLO) : +2,9s, +57 Mo.
+- Qwen3-1.7B-Q4_K_M : chargement ~3,8s +2 Go RAM, inference ~1,9s (~35 tok/s).
 
 ## Moderation de contenu (2026-07-30)
 
