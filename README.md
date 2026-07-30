@@ -100,14 +100,25 @@ modeles (pas seulement en relisant le code) — corrigees dans `requirements.txt
   architecture: 'qwen3'`. Corrige vers `0.3.34` (wheel CPU precompilee,
   toujours pas de compilation source).
 
-Chiffres reels mesures sur le VPS (bench_moderation.py / bench_text.py,
-image de test neutre) :
+Chiffres reels mesures sur le VPS backend colocalise 178.238.230.82
+(bench_moderation.py / bench_text.py, image de test neutre) :
 - Chargement CLIP (ViT-B-32) : ~24s, +1,44 Go RAM (one-shot par job).
 - `classify_nsfw` une fois CLIP charge : +0,24s, +5 Mo — confirme le cout
   quasi nul de la moderation NSFW une fois l'embedding recommandation deja
   calcule.
 - YOLO (decharge CLIP, charge YOLO) : +2,9s, +57 Mo.
 - Qwen3-1.7B-Q4_K_M : chargement ~3,8s +2 Go RAM, inference ~1,9s (~35 tok/s).
+
+**Ecart de perf CPU entre les deux VPS Contabo (2026-07-30).** Sur le VPS
+distant 169.58.100.82 (meme CPU annonce — AMD EPYC, 6 vCPU — et memes
+modeles), l'inference Qwen3 mesure ~10s au lieu de ~1,9s (5x plus lent),
+chargement CLIP ~33s au lieu de ~24s. RAM et threads identiques, mesure
+reproductible sur 2 runs consecutifs (pas un effet de demarrage a froid).
+Cause probable : vCPU plus contendus (sur-souscription differente entre les
+deux offres/regions Contabo), pas un probleme de configuration cote
+`ai_service`. A garder en tete pour le dimensionnement final — si cette
+latence est genante en usage reel, verifier le type d'instance exact aupres
+de Contabo avant d'incriminer le code.
 
 ## Moderation de contenu (2026-07-30)
 
