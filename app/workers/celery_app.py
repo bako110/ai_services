@@ -9,6 +9,14 @@ celery_app = Celery(
     "ai_service",
     broker=settings.rabbitmq_url,
     backend=settings.redis_url,
+    # Sans `include`, le process worker (`celery -A app.workers.celery_app
+    # worker`) ne charge jamais app/workers/tasks.py, donc le @celery_app.task
+    # de analyze_reel n'est jamais execute cote worker et la tache reste
+    # "unregistered" — constate en prod le 2026-07-30 :
+    # "Received unregistered task of type 'ai.analyze_reel'". Seul le process
+    # FastAPI (via routes_ingest.py qui importe tasks.py pour appeler .delay())
+    # connaissait la tache, pas le worker qui doit l'executer.
+    include=["app.workers.tasks"],
 )
 
 # concurrency=1 au lancement du worker
