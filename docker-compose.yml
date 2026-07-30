@@ -46,4 +46,4 @@ services:
 networks:
   stream_net:
     external: true
-    # name: backend-stack_stream_net   # decommenter et ajuster si le nom reel differe
+    name: backend-stack_stream_net   # confirme via `docker network ls` sur le VPS le 2026-07-30
