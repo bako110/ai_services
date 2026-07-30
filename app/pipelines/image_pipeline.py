@@ -103,7 +103,17 @@ def classify_nsfw(image_path: str) -> dict:
             offset += size
         group_scores = torch.stack(group_scores)
 
-        probs = torch.softmax(group_scores * 100.0, dim=0)  # temperature CLIP standard
+        # Temperature reduite (20, pas les 100 "standard" souvent cites pour du
+        # zero-shot ImageNet) : mesure reelle 2026-07-30 montre des similarites
+        # cosinus brutes toutes tassees entre 0.01 et 0.18 pour ces prompts —
+        # avec *100, un ecart de 0.02 (bruit) devient un facteur e^2~7x en
+        # probabilite, produisant des faux positifs confiants (ex. 60% "sexual
+        # explicit" sur une photo de couteau de cuisine). *20 attenue cet effet
+        # sans supprimer le signal reel. Reste un palliatif : CLIP ViT-B-32 en
+        # zero-shot a un pouvoir discriminant limite sur ce cas precis (cf.
+        # ARCHITECTURE_IA.md section 9) — ne pas se fier a `confidence` comme
+        # une probabilite calibree, uniquement comme un ordre de grandeur relatif.
+        probs = torch.softmax(group_scores * 20.0, dim=0)
 
     scores = {label: round(float(p), 4) for label, p in zip(_NSFW_LABELS, probs)}
     best_label = max(scores, key=scores.get)

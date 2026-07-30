@@ -20,7 +20,15 @@ from app.pipelines.image_pipeline import classify_nsfw
 # Seuils de confiance au-dela desquels un signal individuel declenche un flag.
 # Volontairement hauts (peu de faux positifs) car aucune revue humaine
 # n'existe encore en amont — cf. ARCHITECTURE_IA.md section 9.
-NSFW_CONFIDENCE_THRESHOLD = 0.6
+#
+# NSFW_CONFIDENCE_THRESHOLD releve a 0.8 suite a un faux positif reel constate
+# le 2026-07-30 : une photo de couteau de cuisine (aucun contenu sexuel)
+# classee "sexual_explicit" a 0.6084 avec l'ancienne temperature de softmax
+# (100). Meme apres correction de la temperature (image_pipeline.py, 100->20),
+# `confidence` sur ce classifieur zero-shot CLIP n'est PAS une probabilite
+# calibree — un seuil haut reste necessaire pour limiter les faux positifs
+# tant qu'aucune revue humaine n'absorbe le signal en amont.
+NSFW_CONFIDENCE_THRESHOLD = 0.8
 TEXT_FLAG_CONFIDENCE_THRESHOLD = 0.5
 
 # Correspondance vers ReportReason (stream_backend/app/db/postgres/models/report.py)
