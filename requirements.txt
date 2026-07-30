@@ -14,8 +14,11 @@ pgvector==0.2.5
 # Index dedie = wheel CPU precompilee, evite de compiler depuis les sources
 # (CMake/gcc) au build Docker — risque reel sur une image python:3.11-slim
 # sans toolchain, et compiler consomme de la RAM/CPU inutilement sur ce VPS.
+# >=0.3.x requis : 0.2.76 (mai 2024) precede le support de l'architecture GGUF
+# "qwen3" dans llama.cpp -- echec "unknown model architecture: 'qwen3'" constate
+# 2026-07-30 sur le VPS avec le modele Qwen3-1.7B-Q4_K_M.gguf reel.
 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-llama-cpp-python==0.2.76
+llama-cpp-python==0.3.34
 
 # Image — embeddings
 open-clip-torch==2.24.0
