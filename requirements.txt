@@ -1,0 +1,35 @@
+
+# Service IA GoFolyX — inference uniquement, CPU-only par defaut.
+# Voir ARCHITECTURE_IA.md section 3 pour la justification de chaque choix.
+
+fastapi==0.110.2
+uvicorn[standard]==0.29.0
+celery==5.3.6
+redis==5.0.4
+pydantic-settings==2.2.1
+asyncpg==0.29.0
+pgvector==0.2.5
+
+# Texte — LLM quantifie via llama.cpp (pas de PyTorch requis pour cette brique).
+# Index dedie = wheel CPU precompilee, evite de compiler depuis les sources
+# (CMake/gcc) au build Docker — risque reel sur une image python:3.11-slim
+# sans toolchain, et compiler consomme de la RAM/CPU inutilement sur ce VPS.
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+llama-cpp-python==0.2.76
+
+# Image — embeddings
+open-clip-torch==2.24.0
+torch==2.3.0+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Detection d'objets
+ultralytics==8.2.18
+
+# Audio — transcription (CTranslate2, plus leger que whisper original)
+faster-whisper==1.0.2
+
+# Video — extraction frames/audio (wrapper CLI ffmpeg, ffmpeg lui-meme doit etre installe sur le systeme)
+ffmpeg-python==0.2.0
+
+# Phase 0 — mesure RAM/latence des benchmarks (scripts/bench_*.py)
+psutil==5.9.8

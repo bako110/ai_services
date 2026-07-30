@@ -1,0 +1,49 @@
+version: '3.9'
+
+# Rejoint le reseau Docker EXISTANT de stream_backend (stream_backend/docker-compose.prod.yml)
+# pour resoudre les hostnames "postgres"/"redis"/"rabbitmq" sans exposer ces
+# services publiquement. Verifier le nom reel du reseau sur le VPS avant de
+# deployer : `docker network ls` (docker-compose prefixe souvent le nom du
+# projet, ex. "backend-stack_stream_net" si le dossier est /opt/backend-stack).
+#
+# Credentials : injectees via env_file depuis le vrai .env de stream_backend
+# (sur le VPS, /opt/backend-stack/.env) — jamais dupliquees ni commit ici.
+
+services:
+  ai_service:
+    build: .
+    container_name: gofolyx_ai_service
+    restart: unless-stopped
+    env_file:
+      # Chemin ABSOLU vers le vrai .env de stream_backend sur le VPS
+      # (confirme : /opt/backend-stack/.env, PAS un sous-dossier stream_backend/ —
+      # ne pas utiliser un chemin relatif type ../../stream_backend/.env, qui ne
+      # correspond qu'a la structure du repo git local, pas au layout du serveur).
+      # Ajuster si ai_service est deploye ailleurs que /opt/backend-stack/ai_service.
+      - /opt/backend-stack/.env
+      - .env.ai                     # variables propres a ai_service, sans secrets (copie de .env.ai.example)
+    volumes:
+      - ./models:/app/models:ro
+    networks:
+      - stream_net
+    expose:
+      - "8100"
+
+  ai_celery_worker:
+    build: .
+    container_name: gofolyx_ai_celery_worker
+    restart: unless-stopped
+    env_file:
+      - /opt/backend-stack/.env      # meme chemin absolu que le service ai_service ci-dessus
+      - .env.ai
+    volumes:
+      - ./models:/app/models:ro
+    networks:
+      - stream_net
+    # concurrency=1 volontaire — voir ARCHITECTURE_IA.md section 4 (RAM limitee, VPS partage)
+    command: celery -A app.workers.celery_app worker -Q ai --concurrency=1 --loglevel=info
+
+networks:
+  stream_net:
+    external: true
+    # name: backend-stack_stream_net   # decommenter et ajuster si le nom reel differe
