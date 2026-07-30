@@ -14,9 +14,17 @@ from app.core.model_manager import model_manager
 
 
 def extract_keyframes(video_path: str, count: int = 3) -> list[str]:
+    """Retourne les chemins des frames extraites, ou [] si ffmpeg echoue
+    (fichier non-video, corrompu, URL inaccessible...) — ne leve jamais,
+    cf. principe de degradation gracieuse (README "Avant de coder une
+    nouvelle fonctionnalite"). Constate en prod le 2026-07-30 : sans ce
+    garde-fou, un CalledProcessError ici faisait planter toute la tache
+    Celery analyze_reel avant meme d'atteindre son `if frames:` (tasks.py),
+    qui gere pourtant deja explicitement le cas 0 frame.
+    """
     out_dir = Path(tempfile.mkdtemp(prefix="ai_frames_"))
     pattern = str(out_dir / "frame_%02d.jpg")
-    subprocess.run(
+    result = subprocess.run(
         [
             # La virgule dans mod(n,30) doit etre echappee (\,) pour le parseur
             # de filtergraph ffmpeg, qui sinon la lit comme separateur d'option
@@ -26,8 +34,10 @@ def extract_keyframes(video_path: str, count: int = 3) -> list[str]:
             "ffmpeg", "-i", video_path, "-vf", r"select='not(mod(n\,30))'",
             "-frames:v", str(count), "-vsync", "vfr", pattern, "-y",
         ],
-        check=True, capture_output=True,
+        capture_output=True,
     )
+    if result.returncode != 0:
+        return []
     return sorted(str(p) for p in out_dir.glob("frame_*.jpg"))
 
 
