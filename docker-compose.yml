@@ -26,8 +26,13 @@ services:
       - .env.ai
     volumes:
       - ./models:/app/models:ro
+    # Bind sur l'IP WireGuard uniquement (10.10.0.2 = ce serveur cote tunnel),
+    # jamais 0.0.0.0 — meme principe de securite que postgres/redis/rabbitmq
+    # cote VPS backend. Le service n'a pas besoin d'etre joignable depuis
+    # l'internet public : seul le VPS backend (10.10.0.1) doit pouvoir
+    # l'appeler, une fois l'integration cablee cote stream_backend.
     ports:
-      - "8100:8100"
+      - "10.10.0.2:8100:8100"
 
   ai_celery_worker:
     build: .
