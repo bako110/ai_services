@@ -60,6 +60,20 @@ def _classify_category(llm, content: str) -> str:
 
 
 def _classify_moderation(llm, content: str) -> str:
+    """Volontairement calibre sur des cas nets (arnaque/haine/violence/spam
+    "graves"), pas sur les insultes legeres ou ambigues. Tentative
+    d'elargissement testee le 2026-07-31 : demander au modele de detecter
+    aussi les insultes courtes type "tu es malade" faisait remonter le taux
+    de detection de ce cas precis, mais generait de nouveaux faux positifs
+    sur des phrases positives ambigues ("tu es malade ce truc est stylé",
+    expression figuree) — ce petit modele 1.7B ne distingue pas le sens
+    figure sans plus de contexte. Revert : mieux vaut louper une insulte
+    legere que flaguer a tort un message bienveillant, cf. principe deja
+    pose de minimiser les faux positifs tant qu'aucune revue humaine
+    n'absorbe le signal en amont. Les insultes/harcelement plus subtils
+    restent geres par le signalement utilisateur existant
+    (stream_backend/app/services/report_service.py), pas par ce signal IA.
+    """
     prompt = (
         "Ce contenu contient-il une arnaque, un discours haineux, une "
         "incitation a la violence, ou du spam ? Une arnaque est une promesse "
