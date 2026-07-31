@@ -120,6 +120,42 @@ deux offres/regions Contabo), pas un probleme de configuration cote
 latence est genante en usage reel, verifier le type d'instance exact aupres
 de Contabo avant d'incriminer le code.
 
+## Campagne de tests qualite — faux positifs/negatifs (2026-07-31)
+
+Suite a un premier constat alarmant (le prompt Qwen3 combine categorie+
+moderation echouait sur 8/8 cas de test, cf. section suivante), une campagne
+de tests structuree a ete menee sur les 3 signaux de moderation avant de
+faire confiance au systeme. Echantillons : contenu neutre varie (cuisine,
+sport, musique, mode, plage) + cas explicitement problematiques (arnaque,
+haine, violence, spam), tous legaux/publics (aucune image NSFW reelle
+utilisee — cf. decision produit de ne pas manipuler ce type de contenu pour
+les tests).
+
+**Moderation texte (Qwen3, apres fix du prompt double-appel — voir section
+suivante)** : 5/5 cas problematiques detectes (arnaque evidente, arnaque
+subtile, haine, violence, spam), 0/3 faux positif sur les cas neutres.
+Categorie (musique/sport/cuisine...) reste peu fiable independamment de la
+moderation — pas bloquant pour la moderation elle-meme.
+
+**NSFW image (CLIP zero-shot)** : 5/6 images correctement `safe` (sport,
+mode, cuisine, plage, photo generique) avec confidence sous le seuil de flag
+(0.8) dans tous les cas — 0 flag errone declenche sur cet echantillon. Une
+image (couteau de cuisine) reste mal etiquetee `sexual_explicit` en label
+brut mais sous le seuil, donc sans consequence pratique pour l'instant (cf.
+limite deja documentee du classifieur zero-shot).
+
+**Objets sensibles (YOLO)** : 0 faux positif constate, y compris sur une
+photo de cuisine avec pomme/bol/tasse (aucun couteau visible => pas de flag)
+— la crainte initiale que "toute video de cuisine avec un couteau" declenche
+un flag violence n'est pas confirmee empiriquement : YOLO ne detecte que la
+presence reelle d'un couteau dans le cadre, pas la categorie "cuisine" en
+general.
+
+**Limite de cette campagne : echantillon petit (6 images, 8 textes), pas une
+validation statistique rigoureuse.** Un vrai taux de faux positifs/negatifs
+fiable demanderait des centaines d'exemples reels de la plateforme. Ces tests
+donnent une premiere confiance raisonnable, pas une garantie.
+
 ## Moderation de contenu (2026-07-30)
 
 `app/pipelines/moderation_pipeline.py` combine trois signaux en un verdict
