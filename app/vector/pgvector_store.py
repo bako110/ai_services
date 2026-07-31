@@ -34,15 +34,29 @@ async def save_embedding(content_type: str, content_id: str, embedding: list[flo
         await conn.close()
 
 
+# normalize_category(None) (stream_backend/app/utils/content_category.py)
+# retourne toujours "autre", jamais NULL -- toute ligne creee via ReelService.
+# create_reel a donc systematiquement category="autre" en absence de choix du
+# createur, jamais NULL. Un filtre `WHERE category IS NULL` ne matcherait
+# donc jamais rien (constate 2026-07-31 avant meme le premier cablage reel).
+DEFAULT_CATEGORY = "autre"
+
+
 async def save_category(content_type: str, content_id: str, category: str) -> None:
     """Ecrit la categorie inferee dans la colonne `category` existante
-    (deja presente sur reels/posts/lives/communities, cf. reel.py etc.)."""
+    (deja presente sur reels/posts/lives/communities, cf. reel.py etc.).
+
+    Ne remplace que `category = "autre"`. Limite connue : impossible de
+    distinguer en base un "autre" par defaut (createur n'a rien choisi) d'un
+    "autre" choisi expres par le createur — les deux cas sont ecrases par
+    l'IA de la meme facon. Compromis accepte faute d'une colonne separee
+    (ex. category_is_explicit) qui n'existe pas dans le schema actuel."""
     table = {"reel": "reels", "post": "posts", "live": "lives"}[content_type]
     conn = await asyncpg.connect(settings.database_url)
     try:
         await conn.execute(
-            f"UPDATE {table} SET category = $1 WHERE id = $2 AND category IS NULL",
-            category, content_id,
+            f"UPDATE {table} SET category = $1 WHERE id = $2 AND category = $3",
+            category, content_id, DEFAULT_CATEGORY,
         )
     finally:
         await conn.close()
