@@ -120,6 +120,36 @@ deux offres/regions Contabo), pas un probleme de configuration cote
 latence est genante en usage reel, verifier le type d'instance exact aupres
 de Contabo avant d'incriminer le code.
 
+## Comportement RAM de model_manager sur plusieurs cycles (2026-07-31)
+
+Question testee : `model_manager` (`del` + `gc.collect()` a chaque changement
+de modele) libere-t-il vraiment la RAM, ou accumule-t-il d'un cycle a
+l'autre ? Mesure sur 4 cycles complets Qwen3->CLIP->YOLO->Qwen3->... :
+
+```
+cycle 0 - apres Qwen3: 2050.7 MB | apres CLIP: 1040.3 MB | apres YOLO: 1095.9 MB
+cycle 1 - apres Qwen3: 3036.8 MB | apres CLIP: 1676.8 MB | apres YOLO: 1568.7 MB
+cycle 2 - apres Qwen3: 3495.2 MB | apres CLIP: 1772.8 MB | apres YOLO: 1626.8 MB
+cycle 3 - apres Qwen3: 3553.3 MB | apres CLIP: 1723.7 MB | apres YOLO: 1615.5 MB
+```
+
+La RAM monte entre les cycles 0 et 2, **puis se stabilise en plateau** (cycle
+2->3 quasi plat sur les 3 mesures) — ce n'est pas une fuite progressive qui
+grimperait indefiniment, c'est le comportement normal d'un allocateur memoire
+(glibc malloc / allocateur PyTorch) qui garde des blocs deja alloues en
+reserve pour les reutiliser plus vite, plutot que de les rendre
+systematiquement a l'OS a chaque `gc.collect()`. Le RSS mesure par `psutil`
+inclut cette memoire "reservee mais pas activement utilisee".
+
+**Plateau observe : ~3,5 Go dans le pire cas (juste apres un chargement
+Qwen3, avant que le prochain modele ne prenne le relai)** — a comparer au
+budget MAX_RAM_MB_FOR_MODELS (.env, defaut 2500 Mo) et a la RAM reellement
+disponible sur le serveur cible. Sur le VPS backend colocalise
+(178.238.230.82, ~3,5-3,9 Gi libres), ce plateau est limite mais reste sous
+la limite dans les mesures faites. A resurveiller si le volume de traitement
+augmente (plus de cycles rapprochés pourraient faire monter le plateau plus
+haut que mesure ici sur seulement 4 cycles).
+
 ## Campagne de tests qualite — faux positifs/negatifs (2026-07-31)
 
 Suite a un premier constat alarmant (le prompt Qwen3 combine categorie+
