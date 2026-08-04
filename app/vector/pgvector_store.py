@@ -91,6 +91,35 @@ _TIER_TO_REEL_STATUS = {"auto_remove": "archived", "limited": "limited"}
 _FALLBACK_REPORT_REASON = "other"
 
 
+async def get_content_owner(content_type: str, content_id: str) -> str | None:
+    """Retourne le user_id (str) du createur du contenu, ou None si introuvable.
+    Utilise pour notifier le createur du resultat de sa propre analyse IA
+    (cf. workers/tasks.py) -- analyze_reel ne recoit que reel_id, pas l'auteur."""
+    table = {"reel": "reels", "post": "posts", "live": "lives"}[content_type]
+    conn = await asyncpg.connect(settings.database_url)
+    try:
+        row = await conn.fetchrow(f"SELECT user_id FROM {table} WHERE id = $1", content_id)
+        return str(row["user_id"]) if row else None
+    finally:
+        await conn.close()
+
+
+async def mark_analysis_done(content_type: str, content_id: str) -> None:
+    """Marque ai_analysis_status="done" (colonne UI uniquement, cf. reel.py) —
+    fait dans tous les cas (tier="none" inclus), contrairement a
+    apply_moderation_verdict qui ne fait rien si tier="none"."""
+    if content_type != "reel":
+        return  # colonne ai_analysis_status n'existe que sur reels pour l'instant
+    conn = await asyncpg.connect(settings.database_url)
+    try:
+        await conn.execute(
+            "UPDATE reels SET ai_analysis_status = 'done' WHERE id = $1",
+            content_id,
+        )
+    finally:
+        await conn.close()
+
+
 async def apply_moderation_verdict(
     content_type: str,
     content_id: str,
@@ -100,7 +129,8 @@ async def apply_moderation_verdict(
     """Applique le verdict de moderation_pipeline.build_verdict() en base :
     cree un Report (meme table que les signalements humains, reporter_id =
     compte systeme dedie) et, pour les paliers "limited"/"auto_remove",
-    change le statut du contenu. Ne fait rien si tier == "none".
+    change le statut du contenu. Ne fait rien si tier == "none" (cf.
+    mark_analysis_done pour le badge UI, mis a jour separement dans tous les cas).
 
     Jamais de suppression definitive (DELETE) : "auto_remove" passe le
     contenu a status="archived", reversible par un admin via l'interface de
