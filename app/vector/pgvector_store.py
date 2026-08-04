@@ -18,13 +18,27 @@ le prefixe `+asyncpg` ni ce query param.
 """
 
 import asyncpg
+from pgvector.asyncpg import register_vector
 
 from app.core.config import settings
 
 
+async def _connect() -> asyncpg.Connection:
+    """asyncpg brut ne sait pas encoder une list[float] Python vers le type
+    `vector` Postgres (constate en prod 2026-08 : DataError "expected str,
+    got list" au premier vrai appel de save_embedding contre la colonne
+    reelle -- jamais declenche avant car la colonne n'existait pas encore
+    lors des tests precedents). register_vector() enregistre le codec
+    pgvector sur CETTE connexion — necessaire avant toute requete qui lit ou
+    ecrit une colonne `vector`."""
+    conn = await asyncpg.connect(settings.database_url)
+    await register_vector(conn)
+    return conn
+
+
 async def save_embedding(content_type: str, content_id: str, embedding: list[float]) -> None:
     table = {"reel": "reels", "post": "posts", "live": "lives"}[content_type]
-    conn = await asyncpg.connect(settings.database_url)
+    conn = await _connect()
     try:
         await conn.execute(
             f"UPDATE {table} SET embedding = $1 WHERE id = $2",
@@ -138,7 +152,7 @@ async def apply_moderation_verdict(
 
 async def find_similar(content_type: str, embedding: list[float], limit: int = 10) -> list[dict]:
     table = {"reel": "reels", "post": "posts", "live": "lives"}[content_type]
-    conn = await asyncpg.connect(settings.database_url)
+    conn = await _connect()
     try:
         rows = await conn.fetch(
             f"SELECT id, embedding <=> $1 AS distance FROM {table} "
