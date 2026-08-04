@@ -61,7 +61,18 @@ _TIER_TO_NOTIFICATION_BODY = {
 
 def _notify_owner(reel_id: str, owner_id: str | None, tier: str) -> None:
     """Fire-and-forget : ne fait jamais echouer analyze_reel si le backend ou
-    RabbitMQ est indisponible au moment de l'envoi."""
+    RabbitMQ est indisponible au moment de l'envoi.
+
+    queue="notifications", pas "default" : constate en prod (2026-08) que
+    app.tasks.notification_tasks.* est routee vers la queue "notifications"
+    cote stream_backend (task_routes, app/tasks/celery_app.py), qui n'a
+    aucun argument special declare (pas de TTL/DLQ contrairement a "default").
+    Envoyer sur "default" avec les mauvais arguments de queue faisait
+    echouer la publication RabbitMQ : PRECONDITION_FAILED
+    "inequivalent arg 'x-message-ttl'" (la queue "default" existante cote
+    backend a un TTL de 24h + DLQ que kombu tentait de re-declarer sans, cf.
+    kombu/RabbitMQ qui exige des arguments identiques a chaque (re)declaration
+    d'une queue existante)."""
     if not owner_id:
         return
     try:
@@ -73,7 +84,7 @@ def _notify_owner(reel_id: str, owner_id: str | None, tier: str) -> None:
                 _TIER_TO_NOTIFICATION_BODY[tier],
             ],
             kwargs={"ref_id": reel_id, "ref_type": "reel"},
-            queue="default",
+            queue="notifications",
         )
     except Exception:
         pass
