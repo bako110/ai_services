@@ -17,5 +17,12 @@ class Settings(BaseSettings):
     max_ram_mb_for_models: int = 2500
     ai_queue_concurrency: int = 1
 
+    # UUID du compte systeme stream_backend (users.id) utilise comme reporter_id
+    # pour les Report crees automatiquement par la moderation IA (cf.
+    # moderation_pipeline.py, workers/tasks.py::_apply_moderation_verdict).
+    # Cree une seule fois en base (email ai-moderation@gofolyx.internal),
+    # voir ARCHITECTURE_IA.md section 9bis pour le detail.
+    ai_moderation_reporter_id: str
+
 
 settings = Settings()

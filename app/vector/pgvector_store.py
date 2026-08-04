@@ -62,6 +62,80 @@ async def save_category(content_type: str, content_id: str, category: str) -> No
         await conn.close()
 
 
+# Mapping palier de moderation -> statut reel (stream_backend/app/db/postgres/
+# models/reel.py::ReelStatus). "auto_remove" -> archived (pas de suppression
+# definitive, cf. block_reported_content existant qui fait la meme chose pour
+# les signalements humains -- reversible par un admin, contrairement a
+# delete_reported_content). "limited" -> nouveau statut ReelStatus.limited,
+# ajoute 2026-08 (ALTER TYPE reelstatus ADD VALUE 'limited').
+_TIER_TO_REEL_STATUS = {"auto_remove": "archived", "limited": "limited"}
+
+# Reason par defaut si `reasons` est vide malgre un tier != "none" -- ne
+# devrait jamais arriver en pratique (build_verdict ne renvoie un tier positif
+# que s'il y a au moins 1 reason), mais Report.reason est NOT NULL cote
+# backend donc il faut une valeur de repli plutot que de planter l'ecriture.
+_FALLBACK_REPORT_REASON = "other"
+
+
+async def apply_moderation_verdict(
+    content_type: str,
+    content_id: str,
+    verdict: dict,
+    reporter_id: str,
+) -> None:
+    """Applique le verdict de moderation_pipeline.build_verdict() en base :
+    cree un Report (meme table que les signalements humains, reporter_id =
+    compte systeme dedie) et, pour les paliers "limited"/"auto_remove",
+    change le statut du contenu. Ne fait rien si tier == "none".
+
+    Jamais de suppression definitive (DELETE) : "auto_remove" passe le
+    contenu a status="archived", reversible par un admin via l'interface de
+    moderation existante -- coherent avec le principe deja pose de ne jamais
+    laisser l'IA prendre une decision irreversible seule.
+    """
+    tier = verdict.get("tier", "none")
+    if tier == "none":
+        return
+
+    reasons = verdict.get("reasons") or [_FALLBACK_REPORT_REASON]
+    table = {"reel": "reels", "post": "posts", "live": "lives"}[content_type]
+    new_status = _TIER_TO_REEL_STATUS.get(tier)
+
+    conn = await asyncpg.connect(settings.database_url)
+    try:
+        async with conn.transaction():
+            # Pas de contrainte unique en base sur (reporter_id, content_type,
+            # content_id) — seule create_report() la fait cote applicatif pour
+            # les signalements humains. Verification manuelle ici pour eviter
+            # des doublons si analyze_reel est relance (retry Celery, re-run
+            # manuel) sur un contenu deja modere par ce meme compte systeme.
+            already_reported = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM reports WHERE reporter_id = $1 AND content_type = $2 AND content_id = $3)",
+                reporter_id, content_type, content_id,
+            )
+            if already_reported:
+                return
+
+            for reason in reasons:
+                await conn.execute(
+                    """
+                    INSERT INTO reports (id, reporter_id, content_type, content_id, reason, details, status, created_at)
+                    VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, now())
+                    """,
+                    reporter_id, content_type, content_id, reason,
+                    f"Signale automatiquement par ai_service (palier: {tier})",
+                    "resolved" if tier == "auto_remove" else "pending",
+                )
+
+            if new_status and table == "reels":
+                await conn.execute(
+                    f"UPDATE {table} SET status = $1 WHERE id = $2 AND status = 'published'",
+                    new_status, content_id,
+                )
+    finally:
+        await conn.close()
+
+
 async def find_similar(content_type: str, embedding: list[float], limit: int = 10) -> list[dict]:
     table = {"reel": "reels", "post": "posts", "live": "lives"}[content_type]
     conn = await asyncpg.connect(settings.database_url)

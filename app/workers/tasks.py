@@ -18,20 +18,17 @@ A ajouter dans process_reel_video() apres reel.status = ReelStatus.published,
 uniquement si reel.category est encore None (ne jamais ecraser un choix du
 createur, cf. save_category() qui filtre deja `WHERE category IS NULL`).
 
-Moderation (ai_service cote 2026-07-30) : `analyze_reel` calcule aussi un
-verdict de moderation (moderation_pipeline.build_verdict) et l'inclut dans le
-resultat de la tache, mais N'ECRIT RIEN en base pour l'instant — aucune
-colonne/table dediee n'existe encore cote stream_backend (pas de
-moderation_queue, pas de champ sur Report pour une origine "ia" vs
-"utilisateur", cf. audit du 2026-07-30). Le resultat reste donc consultable
-via le result-backend Celery (Redis) par task_id le temps que stream_backend
-soit adapte pour le consommer (creer un Report avec reporter_id="ai_service"
-ou equivalent) — decision volontairement reportee pour ne pas modifier
-stream_backend sans validation prealable.
+Moderation (2026-08, cf. moderation_pipeline.py) : `analyze_reel` calcule un
+verdict a 3 paliers (auto_remove / limited / none) et l'applique reellement
+en base via pgvector_store.apply_moderation_verdict — cree un Report (compte
+systeme dedie, cf. config.ai_moderation_reporter_id) et change le statut du
+reel pour les paliers limited/auto_remove. Jamais de suppression definitive
+(DELETE), seulement un changement de statut reversible par un admin.
 """
 
 import asyncio
 
+from app.core.config import settings
 from app.pipelines import audio_pipeline, moderation_pipeline, text_pipeline, video_pipeline
 from app.vector import pgvector_store
 from app.workers.celery_app import celery_app
@@ -66,5 +63,10 @@ def analyze_reel(reel_id: str, video_path: str, title: str = "", description: st
         frame_signals = moderation_pipeline.moderate_frame(frames[0])
 
     verdict = moderation_pipeline.build_verdict(classification, frame_signals)
+
+    if verdict["tier"] != "none":
+        asyncio.run(pgvector_store.apply_moderation_verdict(
+            "reel", reel_id, verdict, settings.ai_moderation_reporter_id,
+        ))
 
     return {"classification": classification, "moderation": verdict}
