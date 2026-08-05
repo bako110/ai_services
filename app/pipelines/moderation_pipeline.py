@@ -23,24 +23,38 @@ probable qu'avec un seuil sur un seul signal.
 
 from app.pipelines import video_pipeline
 from app.pipelines.image_pipeline import classify_nsfw
+from app.pipelines.text_pipeline import FLAG_REASON_TO_REPORT_REASON
 
-# Seuils de confiance au-dela desquels un signal individuel COMPTE comme
-# "signal positif" dans le vote a plusieurs signaux ci-dessous — pas des
-# seuils de decision finale a eux seuls.
-NSFW_CONFIDENCE_THRESHOLD = 0.8
+# Seuils au-dela desquels un signal individuel COMPTE comme "signal positif"
+# dans le vote a plusieurs signaux ci-dessous — pas des seuils de decision
+# finale a eux seuls.
+#
+# NSFW_MARGIN_THRESHOLD (remplace l'ancien NSFW_CONFIDENCE_THRESHOLD=0.8 sur
+# une probabilite softmax, corrige 2026-08-05) : la confiance softmax etait
+# rendue non-calibree par la temperature choisie pour eviter un faux positif
+# (couteau de cuisine a 60% "sexual_explicit") — mais cette meme temperature
+# ecrasait aussi les vrais positifs, confidence n'atteignant jamais 0.8 quel
+# que soit le contenu reel. cf. image_pipeline.classify_nsfw pour le detail :
+# la decision se base desormais sur la marge de similarite cosinus BRUTE
+# (groupe nsfw le plus eleve moins le groupe "safe"), plus stable qu'une
+# probabilite deformee par un choix de temperature. Seuil positif mais bas :
+# mesure texte-texte 2026-08-05 montre des ecarts significatifs de l'ordre de
+# 0.02-0.1 entre groupes proches — une marge > 0.02 suffit deja a capter un
+# signal reel sans etre aussi permissif qu'un seuil a 0 qui capterait du bruit.
+NSFW_MARGIN_THRESHOLD = 0.02
 TEXT_FLAG_CONFIDENCE_THRESHOLD = 0.5
 
 # Correspondance vers ReportReason (stream_backend/app/db/postgres/models/report.py)
 # — permet a l'appelant de creer un Report avec la meme taxonomie sans mapping
-# supplementaire. "suggestive" (CLIP) ne mappe sur rien ici : signal trop faible
-# pour compter meme comme signal individuel (cf. NSFW_CONFIDENCE_THRESHOLD).
+# supplementaire. "suggestive" (CLIP) ne mappe pas ici volontairement : signal
+# plus ambigu (tenue suggestive != contenu explicite), reste scope au strict
+# necessaire pour ce fix (contenu explicite non detecte), pas d'elargissement.
 _NSFW_LABEL_TO_REPORT_REASON = {"sexual_explicit": "inappropriate"}
-_TEXT_FLAG_REASON_TO_REPORT_REASON = {
-    "spam": "spam",
-    "arnaque": "spam",
-    "haine": "harassment",
-    "violence": "violence",
-}
+# Taxonomie fine texte -> ReportReason : definie dans text_pipeline.py (source
+# unique de verite, aux cotes de FLAG_REASONS) pour eviter que les deux
+# fichiers divergent silencieusement si un motif est ajoute d'un cote sans
+# l'autre.
+_TEXT_FLAG_REASON_TO_REPORT_REASON = FLAG_REASON_TO_REPORT_REASON
 _SENSITIVE_OBJECT_REPORT_REASON = "violence"
 
 # Paliers du verdict, du plus au moins severe.
@@ -97,7 +111,7 @@ def build_verdict(
         nsfw = frame_signals.get("nsfw") or {}
         if (
             nsfw.get("label") in _NSFW_LABEL_TO_REPORT_REASON
-            and nsfw.get("confidence", 0.0) >= NSFW_CONFIDENCE_THRESHOLD
+            and nsfw.get("margin", 0.0) >= NSFW_MARGIN_THRESHOLD
         ):
             reasons.append(_NSFW_LABEL_TO_REPORT_REASON[nsfw["label"]])
 

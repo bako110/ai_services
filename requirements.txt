@@ -10,6 +10,10 @@ pydantic-settings==2.2.1
 asyncpg==0.29.0
 pgvector==0.2.5
 
+# Telechargement d'image distante (post/event/concert fournissent une URL
+# R2/S3, contrairement au reel dont les frames sont deja locales via ffmpeg)
+httpx==0.27.0
+
 # Texte — LLM quantifie via llama.cpp (pas de PyTorch requis pour cette brique).
 # Index dedie = wheel CPU precompilee, evite de compiler depuis les sources
 # (CMake/gcc) au build Docker — risque reel sur une image python:3.11-slim
