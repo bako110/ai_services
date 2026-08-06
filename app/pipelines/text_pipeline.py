@@ -21,71 +21,38 @@ def _load_llm():
     return Llama(model_path=settings.text_model_path, n_ctx=2048, n_threads=4)
 
 
-# Taxonomie fine de motifs (2026-08quinquies, couverture max demandee),
-# groupee par familles proches de ReportReason cote stream_backend
-# (app/db/postgres/models/report.py). Classification en 2 PASSES (cf.
-# _classify_moderation) plutot qu'un choix direct parmi ~40 motifs : ce
-# modele 1.7B quantifie echoue sur des prompts a trop haute cardinalite (cf.
-# _classify_category deja limite a 19 choix, et l'echec 8/8 documente dans
-# classify_content pour un prompt combine plus simple que celui-ci). La
-# 1ere passe choisit une FAMILLE (cles de _FAMILIES ci-dessous, <= 9 choix,
-# meme ordre de grandeur que _classify_category qui fonctionne en prod) ; la
-# 2e passe, seulement si une famille est detectee, affine le motif exact
-# parmi les quelques valeurs de cette famille.
-_FAMILIES: dict[str, list[str]] = {
-    "spam": ["spam", "arnaque", "phishing", "publicite_abusive", "contenu_trompeur",
-             "escroquerie_financiere", "blanchiment_argent"],
-    "violence": ["violence", "menace", "incitation_violence", "gore",
-                 "terrorisme", "extremisme", "armes", "fabrication_arme"],
-    "haine_harcelement": ["haine", "harcelement", "cyberharcelement", "insultes",
-                          "discrimination", "doxxing", "divulgation_donnees_personnelles"],
-    "desinformation": ["desinformation", "manipulation", "usurpation_identite"],
-    "contenu_adulte": ["nudite", "contenu_sexuel", "pornographie", "exploitation_sexuelle"],
-    "danger_mineur": ["mise_en_danger_mineur"],
-    "automutilation": ["suicide", "automutilation"],
-    "drogue": ["drogue", "trafic_drogue"],
-    "criminalite_info": ["activite_criminelle", "piratage", "malware", "vol_donnees",
-                         "contenu_illegal"],
-    "autre_choquant": ["contenu_choquant", "langage_vulgaire", "contenu_sensible"],
-}
+# Motifs de signalement que le LLM peut choisir — alignes sur ReportReason
+# cote stream_backend (app/db/postgres/models/report.py) pour que
+# moderation_pipeline.py puisse creer un Report avec la meme taxonomie sans
+# table de correspondance separee.
+#
+# Historique de calibration (2026-08quinquies/sexies) : une tentative
+# d'elargissement a ~40 motifs fins groupes en 10 familles a ete testee en
+# prod le 2026-08-06 et ABANDONNEE -- plusieurs formats de prompt essayes
+# (choix unique parmi 10 familles, choix binaire sequentiel par famille,
+# choix unique a 5-6 motifs combinant desinformation avec les 4 motifs
+# d'origine) ont tous echoue sur un jeu de 6 textes de test simples (texte
+# neutre, critique politique legitime, arnaque, violence, haine, spam) :
+# soit repli excessif sur "aucun" par noyade sur la cardinalite, soit biais
+# d'acquiescement massif (un texte neutre repondait "oui" a la moitie des
+# familles testees). Seul le motif "desinformation", pose en QUESTION
+# BINAIRE ISOLEE (jamais combinee dans le meme prompt que les 4 motifs
+# d'origine, cf. _classify_desinformation) avec le format "conclusion
+# d'abord puis justification courte", s'est montre fiable sur tous les cas
+# testes ce jour-la. D'ou ce choix : garder le prompt _classify_moderation
+# EXACTEMENT tel qu'a l'origine (ne pas risquer de le degrader plus avant
+# sans nouveau test complet), et ajouter desinformation comme verification
+# supplementaire separee, seulement si aucun des 4 motifs d'origine n'a
+# matche. Mieux vaut une couverture etroite mais fiable qu'une couverture
+# large qui genere des faux positifs massifs.
+FLAG_REASONS = ["spam", "arnaque", "haine", "violence", "desinformation", "aucun"]
 
-FLAG_REASONS = ["aucun"] + [m for motifs in _FAMILIES.values() for m in motifs]
-
-# Reduction de la taxonomie fine ci-dessus vers les 6 ReportReason reels du
-# backend -- tout motif absent de ce dict (ex. "aucun") ne cree jamais de
-# Report. "desinformation"/"manipulation"/"usurpation_identite" -> misinformation
-# (nouveau, jamais mappe avant 2026-08quinquies) ; le reste des categories
-# choquantes/adultes/mineurs/criminalite -> inappropriate (le plus proche
-# semantiquement parmi les 6 valeurs existantes, aucune categorie dediee cote
-# backend pour ces cas plus graves -- cf. ReportReason, pas d'enum a ajouter
-# sans migration DB).
 FLAG_REASON_TO_REPORT_REASON = {
-    "spam": "spam", "phishing": "spam", "publicite_abusive": "spam",
-    "arnaque": "spam", "contenu_trompeur": "spam",
-    "escroquerie_financiere": "spam", "blanchiment_argent": "spam",
-
-    "violence": "violence", "menace": "violence",
-    "incitation_violence": "violence", "gore": "violence",
-    "terrorisme": "violence", "extremisme": "violence",
-    "armes": "violence", "fabrication_arme": "violence",
-
-    "haine": "harassment", "harcelement": "harassment",
-    "cyberharcelement": "harassment", "insultes": "harassment",
-    "discrimination": "harassment", "doxxing": "harassment",
-    "divulgation_donnees_personnelles": "harassment",
-
-    "desinformation": "misinformation", "manipulation": "misinformation",
-    "usurpation_identite": "misinformation",
-
-    "contenu_choquant": "inappropriate", "nudite": "inappropriate",
-    "contenu_sexuel": "inappropriate", "pornographie": "inappropriate",
-    "exploitation_sexuelle": "inappropriate",
-    "mise_en_danger_mineur": "inappropriate", "suicide": "inappropriate",
-    "automutilation": "inappropriate", "drogue": "inappropriate",
-    "trafic_drogue": "inappropriate", "activite_criminelle": "inappropriate",
-    "piratage": "inappropriate", "malware": "inappropriate",
-    "vol_donnees": "inappropriate", "contenu_illegal": "inappropriate",
-    "langage_vulgaire": "inappropriate", "contenu_sensible": "inappropriate",
+    "spam": "spam",
+    "arnaque": "spam",
+    "haine": "harassment",
+    "violence": "violence",
+    "desinformation": "misinformation",
 }
 
 
@@ -120,72 +87,68 @@ def _classify_category(llm, content: str) -> str:
     return category if category in CATEGORIES else "autre"
 
 
-_FAMILY_PROMPT_DESC = {
-    "spam": "publicite non sollicitee, arnaque financiere, phishing, promo trompeuse",
-    "violence": "menace, incitation a la violence physique, contenu extremiste ou lie aux armes",
-    "haine_harcelement": "discours haineux/discriminatoire, harcelement, insultes, doxxing",
-    "desinformation": "le texte affirme que TOUTES les informations officielles sont des "
-                       "mensonges, incite a partager en urgence 'avant suppression', ou "
-                       "appelle explicitement au boycott general d'une institution sur cette "
-                       "base. Une simple critique ou opinion politique, meme severe, N'EN "
-                       "EST PAS",
-    "contenu_adulte": "nudite, contenu sexuel explicite",
-    "danger_mineur": "mise en danger ou exploitation d'un mineur",
-    "automutilation": "incitation au suicide ou a l'automutilation",
-    "drogue": "vente ou promotion de drogue illegale",
-    "criminalite_info": "activite criminelle organisee, piratage informatique, virus",
-    "autre_choquant": "contenu choquant/violent visuellement decrit, langage tres vulgaire",
-}
-
-
-def _classify_family(llm, content: str) -> str | None:
-    """1ere passe (2026-08quinquies) : choisit une FAMILLE de risque parmi 10,
-    pas un motif fin directement -- cardinalite comparable a
-    _classify_category (19 choix, fonctionne en prod), contrairement a un
-    choix direct parmi les ~40 motifs fins de FLAG_REASONS qui depasserait la
-    capacite fiable de ce modele 1.7B quantifie (cf. classify_content pour
-    l'echec 8/8 deja constate sur un prompt combine plus simple que celui-ci).
-
-    Volontairement calibre sur des cas nets, pas sur l'ambigu : cf.
-    _classify_reason pour le detail du compromis faux-negatifs > faux-positifs
-    deja adopte pour haine/harcelement (tentative d'elargissement revertee le
-    2026-07-31, ce petit modele ne distingue pas le sens figure).
-    """
-    families = "\n".join(f"- {name} : {desc}" for name, desc in _FAMILY_PROMPT_DESC.items())
-    prompt = (
-        "Ce contenu correspond-il a une des categories de risque suivantes ?\n"
-        f"{families}\n"
-        "Si aucune ne correspond clairement, reponds 'aucun'. En cas de doute, "
-        "reponds 'aucun' plutot que de deviner.\n"
-        f"Reponds avec un seul mot parmi: {', '.join(_FAMILIES.keys())}, aucun.\n"
-        f"Contenu: {content} /no_think"
-    )
-    family = _chat(llm, prompt, max_tokens=10)
-    return family if family in _FAMILIES else None
-
-
-def _classify_reason(llm, content: str, family: str) -> str:
-    """2e passe, appelee seulement si _classify_family a detecte une famille --
-    affine le motif exact parmi les quelques valeurs de cette famille (3-8
-    choix), cardinalite faible donc fiable meme sur ce petit modele."""
-    motifs = _FAMILIES[family]
-    if len(motifs) == 1:
-        return motifs[0]
-    prompt = (
-        f"Ce contenu a ete identifie comme relevant de la categorie '{family}'. "
-        f"Quel motif precis parmi: {', '.join(motifs)} decrit le mieux ce contenu ?\n"
-        "Reponds seulement avec le mot du motif, rien d'autre.\n"
-        f"Contenu: {content} /no_think"
-    )
-    reason = _chat(llm, prompt, max_tokens=10)
-    return reason if reason in motifs else motifs[0]
-
-
 def _classify_moderation(llm, content: str) -> str:
-    family = _classify_family(llm, content)
-    if family is None:
-        return "aucun"
-    return _classify_reason(llm, content, family)
+    """Volontairement calibre sur des cas nets (arnaque/haine/violence/spam
+    "graves"), pas sur les insultes legeres ou ambigues. Tentative
+    d'elargissement testee le 2026-07-31 : demander au modele de detecter
+    aussi les insultes courtes type "tu es malade" faisait remonter le taux
+    de detection de ce cas precis, mais generait de nouveaux faux positifs
+    sur des phrases positives ambigues ("tu es malade ce truc est stylé",
+    expression figuree) — ce petit modele 1.7B ne distingue pas le sens
+    figure sans plus de contexte. Revert : mieux vaut louper une insulte
+    legere que flaguer a tort un message bienveillant, cf. principe deja
+    pose de minimiser les faux positifs tant qu'aucune revue humaine
+    n'absorbe le signal en amont. Les insultes/harcelement plus subtils
+    restent geres par le signalement utilisateur existant
+    (stream_backend/app/services/report_service.py), pas par ce signal IA.
+
+    "desinformation" (2026-08sexies) verifiee dans un APPEL LLM SEPARE, pas
+    ajoutee comme 5e choix dans ce meme prompt -- teste en prod le
+    2026-08-06 : l'ajouter comme choix supplementaire ici degradait aussi la
+    detection des 4 motifs d'origine (2/6 cas corrects seulement sur un jeu
+    de 6 textes de test, y compris des ratés sur des cas nets de haine/
+    violence/spam que le prompt a 4 choix seul gere mieux). Cf.
+    _classify_desinformation pour le detail de cette 2e question, jamais
+    combinee dans le meme appel.
+    """
+    prompt = (
+        "Ce contenu contient-il une arnaque, un discours haineux, une "
+        "incitation a la violence, ou du spam ? Une arnaque est une promesse "
+        "de gain irrealiste, une fausse promo, ou une demande d'argent/"
+        "coordonnees bancaires deguisee. Reponds avec un seul mot parmi: "
+        "arnaque, haine, violence, spam, aucun.\n"
+        f"Contenu: {content} /no_think"
+    )
+    flag_reason = _chat(llm, prompt, max_tokens=10)
+    return flag_reason if flag_reason in FLAG_REASONS else "aucun"
+
+
+def _classify_desinformation(llm, content: str) -> bool:
+    """Question binaire ISOLEE (jamais combinee avec _classify_moderation
+    dans le meme prompt, cf. sa docstring) -- cible explicitement le PATTERN
+    manipulatoire (rejet en bloc de toute source officielle comme
+    "mensonge", appel a partager en urgence/avant suppression, incitation au
+    boycott general), jamais la simple opinion/critique politique.
+
+    Format "conclusion d'abord + justification courte" valide en test reel
+    le 2026-08-06 : seul format/motif reste fiable sur 3/3 cas testes (texte
+    neutre -> NON, critique politique legitime -> NON, cas net avec les 3
+    marqueurs presents -> OUI avec justification coherente) parmi 6 formats
+    de prompt differents testes ce jour-la sur ce modele 1.7B quantifie.
+    """
+    prompt = (
+        "Question: Ce texte affirme-t-il explicitement que TOUTES les "
+        "informations officielles sont des mensonges, ET incite-t-il "
+        "explicitement a partager en urgence avant suppression, ET "
+        "appelle-t-il explicitement a un boycott general d'une institution "
+        "sur cette base ? Une simple critique ou opinion politique, meme "
+        "severe, ne compte PAS.\n"
+        f"Texte a analyser: \"{content}\"\n"
+        "Reponds d'abord par UN SEUL MOT sur la premiere ligne: OUI ou NON. "
+        "Puis explique brievement sur la ligne suivante. /no_think"
+    )
+    raw = _chat(llm, prompt, max_tokens=60)
+    return raw.split("\n")[0].strip().startswith("oui")
 
 
 def classify_content(
@@ -204,12 +167,10 @@ def classify_content(
     "gaming|0.9|aucun", aucun cas de test detecte sur 8/8 essais). Decouple,
     chaque prompt simple et isole, la moderation seule a detecte 4/4 cas de
     test (arnaque/haine/violence/spam) sans faux positif sur les cas neutres
-    testes. La moderation elle-meme est en 2 passes depuis 2026-08quinquies
-    (cf. _classify_moderation) pour couvrir ~40 motifs fins sans depasser la
-    cardinalite fiable du modele : 2-3 appels LLM au total selon qu'une
-    famille de risque est detectee ou non. Plus lent que l'ancien schema a 2
-    appels fixes, mais c'est le signal de moderation qui compte le plus ici,
-    pas la latence.
+    testes. 2-3 appels LLM au total depuis 2026-08sexies : categorie,
+    moderation classique, puis desinformation seulement si rien d'autre n'a
+    matche (cf. _classify_desinformation) -- plus lent, mais c'est le signal
+    de moderation qui compte le plus ici, pas la latence.
 
     `confidence` n'est plus produite par le LLM (le modele ne l'estimait pas
     de facon fiable) — fixee a 1.0 si une categorie valide est retournee,
@@ -232,6 +193,8 @@ def classify_content(
 
     category = _classify_category(llm, context)
     flag_reason = _classify_moderation(llm, context)
+    if flag_reason == "aucun" and _classify_desinformation(llm, context):
+        flag_reason = "desinformation"
     flagged = flag_reason != "aucun"
 
     return {
